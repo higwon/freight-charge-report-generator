@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -46,8 +47,8 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setSpacing(10)
         mascot = QLabel()
-        mascot.setFixedSize(48, 48)
-        mascot.setPixmap(self._pixmap("assets/header_mascot.png", 48, 48))
+        mascot.setFixedSize(60, 60)
+        mascot.setPixmap(self._pixmap("assets/header_mascot.png", 60, 60))
         mascot.setAlignment(Qt.AlignCenter)
         title = QLabel(APP_NAME)
         title.setObjectName("Title")
@@ -115,8 +116,15 @@ class MainWindow(QMainWindow):
         self.summary_label = QLabel("아직 생성된 결과가 없습니다.")
         self.summary_label.setObjectName("SummaryLabel")
         self.summary_label.setWordWrap(True)
+        self.summary_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        summary_scroll = QScrollArea()
+        summary_scroll.setObjectName("SummaryScroll")
+        summary_scroll.setWidgetResizable(True)
+        summary_scroll.setFrameShape(QFrame.NoFrame)
+        summary_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        summary_scroll.setWidget(self.summary_label)
         result_text.addWidget(result_title)
-        result_text.addWidget(self.summary_label, 1)
+        result_text.addWidget(summary_scroll, 1)
         result_layout.addLayout(result_text, 1)
         root.addWidget(result_panel, 1)
 
@@ -147,6 +155,7 @@ class MainWindow(QMainWindow):
             QLabel#StatusLabel { font-weight: 600; color: #1f2937; }
             QLabel#ProgressPercent { font-size: 13pt; font-weight: 700; color: #1d4ed8; }
             QLabel#DetailLabel, QLabel#SummaryLabel { color: #4b5563; }
+            QScrollArea#SummaryScroll, QScrollArea#SummaryScroll > QWidget > QWidget { background: transparent; }
             QFrame#Panel { border: 1px solid #d5dbe3; border-radius: 6px; background: #ffffff; }
             QLineEdit { padding: 7px 9px; border: 1px solid #c7ccd4; border-radius: 4px; background: white; }
             QPushButton { min-width: 82px; padding: 8px 14px; border-radius: 4px; border: 1px solid #9aa5b1; background: #ffffff; }
