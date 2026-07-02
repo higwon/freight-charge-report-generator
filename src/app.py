@@ -8,7 +8,7 @@ from collections.abc import Callable
 from .config import ALL_SHEET_NAME, APP_NAME
 from .exceptions import ReportGeneratorError
 from .formatter import Formatter
-from .models import GenerationRequest, GenerationResult
+from .models import GenerationRequest, GenerationResult, ReportFormat
 from .reader import SourceWorkbookReader
 from .transformer import ReportTransformer
 from .utils import resource_path, setup_logging
@@ -38,6 +38,7 @@ class ReportGeneratorService:
         LOGGER.info("Conversion start")
         LOGGER.info("Input file: %s", request.source_path)
         LOGGER.info("Output file: %s", request.output_path)
+        LOGGER.info("Report format: %s", request.report_format.value)
 
         emit(10, "원본 파일을 여는 중입니다.")
         source_data = self.reader.read(request.source_path)
@@ -52,8 +53,9 @@ class ReportGeneratorService:
         LOGGER.info("Number of records: %s", source_data.record_count)
         LOGGER.info("Func Codes found: %s", ", ".join(func_codes))
 
-        emit(85, "Source와 요약 시트를 작성하고 있습니다.")
-        self.writer.write(request.output_path, source_data, summaries, style)
+        report_name = "분석 보고서" if request.report_format == ReportFormat.ANALYTIC else "기본 보고서"
+        emit(85, f"{report_name} 시트를 작성하고 있습니다.")
+        self.writer.write(request.output_path, source_data, summaries, style, request.report_format)
         emit(100, f"저장 완료: {request.output_path.name}")
         LOGGER.info("Success")
         return GenerationResult(
@@ -61,7 +63,8 @@ class ReportGeneratorService:
             record_count=source_data.record_count,
             source_sheet_name=source_data.source_sheet_name,
             func_codes=func_codes,
-            summary_sheet_count=len(summaries),
+            summary_sheet_count=len(summaries) + (1 if request.report_format == ReportFormat.ANALYTIC else 0),
+            report_format=request.report_format,
         )
 
 

@@ -57,7 +57,7 @@ class Formatter:
             cell.alignment = copy(cell_template.alignment)
             cell.number_format = style.amount_format if column == 2 else cell_template.number_format
 
-    def style_raw_sheet(self, worksheet: Worksheet) -> None:
+    def style_raw_sheet(self, worksheet: Worksheet, enable_filter: bool = False) -> None:
         worksheet.freeze_panes = "A2"
         worksheet.sheet_view.showGridLines = False
         header_font = Font(name="맑은 고딕", size=10, bold=True, color="1F2937")
@@ -72,6 +72,8 @@ class Formatter:
             first = column_cells[0]
             if first.value:
                 worksheet.column_dimensions[first.column_letter].width = min(max(len(str(first.value)) + 2, 10), 30)
+        if enable_filter and worksheet.max_row > 1:
+            worksheet.auto_filter.ref = worksheet.dimensions
 
     def _default_style(self) -> ReportStyle:
         font_name = "맑은 고딕"
@@ -129,6 +131,18 @@ class Formatter:
                 "month": RowStyleTemplate(
                     cell(font=bold_font, fill=total_fill, border=separator_border, horizontal="left"),
                     cell(font=bold_font, fill=total_fill, border=separator_border, horizontal="right", number_format=amount),
+                ),
+                "func": RowStyleTemplate(
+                    cell(font=bold_font, fill=port_fill, border=separator_border, horizontal="left", indent=1),
+                    cell(font=bold_font, fill=port_fill, border=separator_border, horizontal="right", number_format=amount),
+                ),
+                "analytic_port": RowStyleTemplate(
+                    cell(font=bold_font, border=separator_border, horizontal="left", indent=2),
+                    cell(font=bold_font, border=separator_border, horizontal="right", number_format=amount),
+                ),
+                "analytic_customer": RowStyleTemplate(
+                    cell(border=separator_border, horizontal="left", indent=3),
+                    cell(border=separator_border, horizontal="right", number_format=amount),
                 ),
                 "port": RowStyleTemplate(
                     cell(font=bold_font, fill=port_fill, border=separator_border, horizontal="left", indent=1),

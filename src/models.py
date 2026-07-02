@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 
 Row = list[Any]
+
+
+class ReportFormat(str, Enum):
+    CLASSIC = "classic"
+    ANALYTIC = "analytic"
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,7 @@ class FuncCodeSummary:
 class GenerationRequest:
     source_path: Path
     output_path: Path
+    report_format: ReportFormat = ReportFormat.CLASSIC
 
 
 @dataclass(frozen=True)
@@ -60,3 +67,4 @@ class GenerationResult:
     source_sheet_name: str
     func_codes: list[str]
     summary_sheet_count: int
+    report_format: ReportFormat

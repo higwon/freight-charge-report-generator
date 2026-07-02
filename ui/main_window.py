@@ -15,13 +15,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QRadioButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from src.config import APP_AUTHOR, APP_NAME, APP_VERSION
-from src.models import GenerationRequest, GenerationResult
+from src.models import GenerationRequest, GenerationResult, ReportFormat
 from src.utils import ensure_xlsx_suffix, resource_path
 from ui.worker import GenerateWorker
 
@@ -73,9 +74,20 @@ class MainWindow(QMainWindow):
         self.source_edit.setPlaceholderText("파일을 선택하거나 창에 드래그하세요")
         self.output_folder_edit = QLineEdit(str(Path.cwd() / "output"))
         self.output_name_edit = QLineEdit("result.xlsx")
+        report_format_widget = QWidget()
+        report_format_layout = QHBoxLayout(report_format_widget)
+        report_format_layout.setContentsMargins(0, 0, 0, 0)
+        report_format_layout.setSpacing(20)
+        self.classic_radio = QRadioButton("기본 보고서")
+        self.analytic_radio = QRadioButton("분석 보고서")
+        self.classic_radio.setChecked(True)
+        report_format_layout.addWidget(self.classic_radio)
+        report_format_layout.addWidget(self.analytic_radio)
+        report_format_layout.addStretch(1)
         form.addRow("Source Excel", self._file_row(self.source_edit, self._choose_source))
         form.addRow("Output Folder", self._file_row(self.output_folder_edit, self._choose_output_folder))
         form.addRow("Output Filename", self.output_name_edit)
+        form.addRow("Report Format", report_format_widget)
         root.addLayout(form)
 
         progress_panel = QFrame()
@@ -233,12 +245,19 @@ class MainWindow(QMainWindow):
         source = Path(self.source_edit.text().strip())
         output_folder = Path(self.output_folder_edit.text().strip())
         filename = ensure_xlsx_suffix(self.output_name_edit.text())
-        request = GenerationRequest(source_path=source, output_path=output_folder / filename)
+        report_format = ReportFormat.ANALYTIC if self.analytic_radio.isChecked() else ReportFormat.CLASSIC
+        request = GenerationRequest(
+            source_path=source,
+            output_path=output_folder / filename,
+            report_format=report_format,
+        )
         if not source.exists():
             QMessageBox.warning(self, "입력 오류", "Source Excel 파일을 선택하세요.")
             return
 
         self.generate_button.setEnabled(False)
+        self.classic_radio.setEnabled(False)
+        self.analytic_radio.setEnabled(False)
         self.open_file_button.setEnabled(False)
         self.open_folder_button.setEnabled(False)
         self.result_image.setVisible(False)
@@ -273,20 +292,26 @@ class MainWindow(QMainWindow):
     def _generation_finished(self, result: GenerationResult) -> None:
         self.last_output_path = result.output_path
         self.generate_button.setEnabled(True)
+        self.classic_radio.setEnabled(True)
+        self.analytic_radio.setEnabled(True)
         self.open_file_button.setEnabled(True)
         self.open_folder_button.setEnabled(True)
         self.result_image.setPixmap(self._pixmap("assets/status_success.png", 76, 76))
         self.result_image.setVisible(True)
         self.status_label.setText("완료 · 결과 파일 저장")
         self.progress_detail.setText(f"{result.summary_sheet_count}/{result.summary_sheet_count} 요약 시트 생성 완료")
+        report_name = "분석 보고서" if result.report_format == ReportFormat.ANALYTIC else "기본 보고서"
         self.summary_label.setText(
             f"생성 완료\nSource: {result.source_sheet_name} · {result.record_count:,}행\n"
+            f"형식: {report_name}\n"
             f"요약 시트: ALL, {', '.join(result.func_codes)}\n출력 파일: {result.output_path}"
         )
         QMessageBox.information(self, "완료", f"결과 파일을 생성했습니다.\n{result.output_path}")
 
     def _generation_failed(self, message: str) -> None:
         self.generate_button.setEnabled(True)
+        self.classic_radio.setEnabled(True)
+        self.analytic_radio.setEnabled(True)
         self.open_file_button.setEnabled(bool(self.last_output_path))
         self.open_folder_button.setEnabled(bool(self.last_output_path))
         self.progress.setValue(0)
