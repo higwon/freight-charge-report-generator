@@ -1,17 +1,21 @@
-# Release Notes
+# 릴리즈 노트
 
 ## v0.2.0
 
-- Detects the source worksheet by required column headers instead of a fixed sheet name.
-- Renames `RawData` to `Source` and adds an `ALL` summary sheet.
-- Adds expandable Month and Port outline levels to summary sheets.
-- Adds application branding, version/author metadata, and success/failure result images.
-- Refreshes the UI with clearer progress stages and Korean action labels.
+- 고정 시트명 대신 필수 컬럼 헤더를 기준으로 Source 시트를 자동 탐지합니다.
+- 원본 데이터 시트명을 `RawData`에서 `Source`로 변경했습니다.
+- AE, AI, OA, OE, OI를 통합한 `ALL` 요약 시트를 추가했습니다.
+- Month와 Port를 접고 펼칠 수 있는 Excel 그룹 기능을 추가했습니다.
+- 앱 아이콘, 타이틀 이미지, 버전 및 제작자 정보를 적용했습니다.
+- 성공·실패 상태 이미지를 결과 요약 영역에 표시합니다.
+- 긴 결과 경로와 오류 내용을 확인할 수 있도록 결과 요약 스크롤을 추가했습니다.
+- 작업 단계를 더 명확하게 표시하고 버튼 문구를 한국어로 정리했습니다.
+- 금액의 소수점은 필요한 경우에만 표시합니다.
 
 ## v0.1.0
 
-- Initial desktop app for generating freight charge summary reports from `LV1DOC`.
-- Supports Excel 2003 XML Spreadsheet, `.xls`, and `.xlsx` source files.
-- Generates `RawData` plus one summary sheet per Func Code.
-- Applies built-in pivot-style formatting and decimal display only when needed.
-- Includes a PySide6 UI with detailed progress, result summary, result-file opening, and output-folder opening.
+- 운임 요약 보고서 생성 데스크톱 애플리케이션 최초 버전입니다.
+- Excel 2003 XML Spreadsheet, `.xls`, `.xlsx` 파일을 지원합니다.
+- 원본 데이터와 Func Code별 요약 시트를 생성합니다.
+- 피벗 스타일 서식과 선택적 소수점 표시를 적용합니다.
+- 진행 상태, 결과 요약, 결과 파일 및 폴더 열기 기능을 제공합니다.
