@@ -1,0 +1,64 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-build:
+    name: Windows zip build
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile main.py
+          python -m py_compile src/app.py src/config.py src/reader.py src/transformer.py src/writer.py src/formatter.py src/models.py src/exceptions.py src/utils.py
+          python -m py_compile ui/main_window.py ui/worker.py
+
+      - name: Build app folder
+        run: python -m PyInstaller FreightChargeReportGenerator.spec --noconfirm
+
+      - name: Package app folder
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\FreightChargeReportGenerator\* -DestinationPath FreightChargeReportGenerator-${{ github.ref_name }}.zip -Force
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FreightChargeReportGenerator-${{ github.ref_name }}
+          path: FreightChargeReportGenerator-${{ github.ref_name }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Freight Charge Report Generator ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: FreightChargeReportGenerator-${{ github.ref_name }}.zip
