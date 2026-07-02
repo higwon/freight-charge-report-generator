@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from io import BytesIO
+import logging
 from pathlib import Path
+import re
 from typing import Any
 from xml.etree import ElementTree as ET
 import zipfile
@@ -12,6 +15,8 @@ from .exceptions import MissingInputFileError, MissingWorksheetError
 from .models import WorkbookData
 
 SS_NS = "{urn:schemas-microsoft-com:office:spreadsheet}"
+LOGGER = logging.getLogger(__name__)
+BARE_AMPERSAND = re.compile(br"&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9A-Fa-f]+;)")
 
 
 class SourceWorkbookReader:
@@ -23,8 +28,16 @@ class SourceWorkbookReader:
             raise MissingInputFileError(f"입력 파일을 찾을 수 없습니다: {path}")
 
         if self._is_excel_xml(path):
-            sheet_name, header_row = self._find_excel_xml_source(path)
-            return self._read_excel_xml(path, sheet_name, header_row)
+            try:
+                sheet_name, header_row = self._find_excel_xml_source(path)
+                return self._read_excel_xml(path, sheet_name, header_row)
+            except ET.ParseError:
+                repaired, replacement_count = self._repair_excel_xml(path)
+                if replacement_count == 0:
+                    raise
+                LOGGER.warning("Repaired %s unescaped ampersands in %s", replacement_count, path)
+                sheet_name, header_row = self._find_excel_xml_source(BytesIO(repaired))
+                return self._read_excel_xml(BytesIO(repaired), sheet_name, header_row)
         if zipfile.is_zipfile(path):
             return self._read_xlsx(path)
         return self._read_xls(path)
@@ -34,11 +47,15 @@ class SourceWorkbookReader:
         with path.open("rb") as file:
             return file.read(64).lstrip().startswith(b"<?xml")
 
-    def _find_excel_xml_source(self, path: Path) -> tuple[str, int]:
+    @staticmethod
+    def _repair_excel_xml(path: Path) -> tuple[bytes, int]:
+        return BARE_AMPERSAND.subn(b"&amp;", path.read_bytes())
+
+    def _find_excel_xml_source(self, source) -> tuple[str, int]:
         candidates: list[tuple[str, int]] = []
         current_sheet = ""
         row_number = 0
-        for event, elem in ET.iterparse(path, events=("start", "end")):
+        for event, elem in ET.iterparse(source, events=("start", "end")):
             if event == "start" and elem.tag.endswith("Worksheet"):
                 current_sheet = elem.attrib.get(f"{SS_NS}Name", "")
                 row_number = 0
@@ -51,14 +68,14 @@ class SourceWorkbookReader:
                 elem.clear()
         return self._select_candidate(candidates)
 
-    def _read_excel_xml(self, path: Path, sheet_name: str, header_row: int) -> WorkbookData:
+    def _read_excel_xml(self, source, sheet_name: str, header_row: int) -> WorkbookData:
         headers: list[str] | None = None
         rows: list[list[Any]] = []
         found_sheet = False
         in_target = False
         row_number = 0
 
-        for event, elem in ET.iterparse(path, events=("start", "end")):
+        for event, elem in ET.iterparse(source, events=("start", "end")):
             if event == "start" and elem.tag.endswith("Worksheet"):
                 current = elem.attrib.get(f"{SS_NS}Name")
                 in_target = current == sheet_name
@@ -70,6 +87,8 @@ class SourceWorkbookReader:
                     headers = ["" if value is None else str(value) for value in values]
                 elif row_number > header_row:
                     rows.append(values)
+                elem.clear()
+            elif event == "end" and elem.tag.endswith("Row"):
                 elem.clear()
 
         if not found_sheet or headers is None:

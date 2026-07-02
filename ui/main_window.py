@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -27,6 +27,8 @@ from ui.worker import GenerateWorker
 
 
 class MainWindow(QMainWindow):
+    SUPPORTED_EXCEL_SUFFIXES = (".xls", ".xlsx")
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
@@ -36,6 +38,7 @@ class MainWindow(QMainWindow):
         self.worker_thread: QThread | None = None
         self.worker: GenerateWorker | None = None
         self.last_output_path: Path | None = None
+        self.setAcceptDrops(True)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -66,6 +69,8 @@ class MainWindow(QMainWindow):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
         self.source_edit = QLineEdit()
+        self.source_edit.setAcceptDrops(False)
+        self.source_edit.setPlaceholderText("파일을 선택하거나 창에 드래그하세요")
         self.output_folder_edit = QLineEdit(str(Path.cwd() / "output"))
         self.output_name_edit = QLineEdit("result.xlsx")
         form.addRow("Source Excel", self._file_row(self.source_edit, self._choose_source))
@@ -194,6 +199,30 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.source_edit.setText(path)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._dropped_excel_path(event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        path = self._dropped_excel_path(event.mimeData().urls())
+        if path:
+            self.source_edit.setText(str(path))
+            self.status_label.setText("Source 파일 선택 완료")
+            self.progress_detail.setText(f"드롭한 파일: {path.name}")
+            event.acceptProposedAction()
+
+    @classmethod
+    def _dropped_excel_path(cls, urls) -> Path | None:
+        for url in urls:
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_file() and path.name.lower().endswith(cls.SUPPORTED_EXCEL_SUFFIXES):
+                return path
+        return None
 
     def _choose_output_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Output Folder 선택", self.output_folder_edit.text())
