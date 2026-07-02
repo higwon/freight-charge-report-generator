@@ -7,7 +7,16 @@ from typing import Any
 
 from .config import ALL_SHEET_NAME, BusinessRules
 from .exceptions import InvalidAmountError, InvalidDateError, MissingRequiredColumnsError
-from .models import CustomerSummary, FuncCodeSummary, MonthSummary, PortSummary, WorkbookData
+from .models import (
+    ArApFuncCodeSummary,
+    ArApMonthlyAmount,
+    ArApSummaryRow,
+    CustomerSummary,
+    FuncCodeSummary,
+    MonthSummary,
+    PortSummary,
+    WorkbookData,
+)
 
 
 class ReportTransformer:
@@ -50,6 +59,73 @@ class ReportTransformer:
             summaries.append(self._build_summary(func_code, grouped[func_code]))
         return summaries
 
+    def transform_ar_ap_monthly(
+        self, data: WorkbookData, month_format: str | None = None
+    ) -> list[ArApFuncCodeSummary]:
+        index = self._header_index(data.headers)
+        self._validate_columns(index)
+        date_format = month_format or self.rules.default_month_format
+        customer_code_index = index.get("Customer Code")
+
+        grouped: dict[
+            str, dict[tuple[str | None, str, str], dict[str, dict[str, Decimal]]]
+        ] = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(Decimal))))
+        months_by_code: dict[str, set[str]] = defaultdict(set)
+
+        for row_number, row in enumerate(data.rows, start=2):
+            func_code = str(self._value(row, index["Func Code"]) or "").strip()
+            if not func_code:
+                continue
+            ar_ap_type = str(self._value(row, index["AR / AP Type"]) or "").strip().upper()
+            if ar_ap_type not in {"AR", "AP"}:
+                continue
+
+            month_label = self._month_label(self._value(row, index["Job Date"]), date_format, row_number)
+            port_column = self._ar_ap_port_column(func_code)
+            port_name: str | None = None
+            if port_column:
+                port_name = str(self._value(row, index[port_column]) or "").strip() or "(Blank)"
+            customer_code = ""
+            if customer_code_index is not None:
+                customer_code = str(self._value(row, customer_code_index) or "").strip()
+            customer_name = str(self._value(row, index["Customer Name"]) or "").strip() or "(Blank)"
+            amount = self._amount(self._value(row, index["Loc Amt"]), row_number)
+
+            grouped[func_code][(port_name, customer_code, customer_name)][month_label][ar_ap_type] += amount
+            months_by_code[func_code].add(month_label)
+
+        summaries: list[ArApFuncCodeSummary] = []
+        for func_code in sorted(grouped, key=self._sort_key):
+            months = sorted(months_by_code[func_code])
+            rows = []
+            for key, monthly_values in sorted(grouped[func_code].items(), key=lambda item: self._summary_row_sort_key(item[0])):
+                month_map = {
+                    month: ArApMonthlyAmount(
+                        ar=monthly_values[month].get("AR", Decimal("0")),
+                        ap=monthly_values[month].get("AP", Decimal("0")),
+                    )
+                    for month in months
+                }
+                rows.append(
+                    ArApSummaryRow(
+                        port=key[0],
+                        customer_code=key[1],
+                        customer_name=key[2],
+                        monthly=month_map,
+                    )
+                )
+            port_label = self._ar_ap_port_label(func_code)
+            summaries.append(
+                ArApFuncCodeSummary(
+                    func_code=func_code,
+                    category=self._ar_ap_category(func_code),
+                    port_label=port_label,
+                    months=months,
+                    rows=rows,
+                )
+            )
+        return summaries
+
     def _build_summary(
         self, func_code: str, grouped: dict[str, dict[str, dict[str, Decimal]]]
     ) -> FuncCodeSummary:
@@ -79,7 +155,8 @@ class ReportTransformer:
 
     @staticmethod
     def _header_index(headers: list[str]) -> dict[str, int]:
-        expected = {" ".join(name.split()).casefold(): name for name in BusinessRules().required_columns}
+        expected_names = set(BusinessRules().required_columns) | {"Customer Code"}
+        expected = {" ".join(name.split()).casefold(): name for name in expected_names}
         result: dict[str, int] = {}
         for position, header in enumerate(headers):
             normalized = " ".join(str(header).replace("\ufeff", "").split()).casefold()
@@ -115,3 +192,29 @@ class ReportTransformer:
     @staticmethod
     def _sort_key(value: str) -> str:
         return value.casefold()
+
+    def _ar_ap_port_column(self, func_code: str) -> str | None:
+        if func_code in self.rules.export_func_codes:
+            return "Arrival Port"
+        if func_code in self.rules.import_func_codes:
+            return "Depart Port"
+        return None
+
+    def _ar_ap_port_label(self, func_code: str) -> str | None:
+        if func_code in self.rules.export_func_codes:
+            return "도착항"
+        if func_code in self.rules.import_func_codes:
+            return "출발항"
+        return None
+
+    def _ar_ap_category(self, func_code: str) -> str:
+        if func_code in self.rules.export_func_codes:
+            return "수출"
+        if func_code in self.rules.import_func_codes:
+            return "수입"
+        return "기타"
+
+    @staticmethod
+    def _summary_row_sort_key(key: tuple[str | None, str, str]) -> tuple[str, str, str]:
+        port, customer_code, customer_name = key
+        return ((port or "").casefold(), customer_name.casefold(), customer_code.casefold())

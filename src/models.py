@@ -13,6 +13,7 @@ Row = list[Any]
 class ReportFormat(str, Enum):
     CLASSIC = "classic"
     ANALYTIC = "analytic"
+    AR_AP_MONTHLY = "ar_ap_monthly"
 
 
 @dataclass(frozen=True)
@@ -54,10 +55,37 @@ class FuncCodeSummary:
 
 
 @dataclass(frozen=True)
+class ArApMonthlyAmount:
+    ar: Decimal = Decimal("0")
+    ap: Decimal = Decimal("0")
+
+    @property
+    def difference(self) -> Decimal:
+        return self.ar - self.ap
+
+
+@dataclass(frozen=True)
+class ArApSummaryRow:
+    port: str | None
+    customer_code: str
+    customer_name: str
+    monthly: dict[str, ArApMonthlyAmount] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ArApFuncCodeSummary:
+    func_code: str
+    category: str
+    port_label: str | None
+    months: list[str]
+    rows: list[ArApSummaryRow] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class GenerationRequest:
     source_path: Path
     output_path: Path
-    report_format: ReportFormat = ReportFormat.CLASSIC
+    report_format: ReportFormat = ReportFormat.AR_AP_MONTHLY
 
 
 @dataclass(frozen=True)

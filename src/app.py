@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from pathlib import Path
 from collections.abc import Callable
 
 from .config import ALL_SHEET_NAME, APP_NAME
@@ -30,7 +29,11 @@ class ReportGeneratorService:
         self.formatter = formatter or Formatter()
         self.writer = writer or ReportWriter(self.formatter)
 
-    def generate(self, request: GenerationRequest, progress: Callable[[int, str], None] | None = None) -> GenerationResult:
+    def generate(
+        self,
+        request: GenerationRequest,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> GenerationResult:
         def emit(percent: int, message: str) -> None:
             if progress:
                 progress(percent, message)
@@ -40,21 +43,27 @@ class ReportGeneratorService:
         LOGGER.info("Output file: %s", request.output_path)
         LOGGER.info("Report format: %s", request.report_format.value)
 
-        emit(10, "원본 파일을 여는 중입니다.")
+        emit(10, "원본 파일을 확인하는 중입니다.")
         source_data = self.reader.read(request.source_path)
         emit(35, f"'{source_data.source_sheet_name}' 시트에서 Source {source_data.record_count:,}행을 읽었습니다.")
 
         style = self.formatter.default_style()
-        emit(50, "월, 포트, 고객 기준으로 금액을 집계하는 중입니다.")
-        summaries = self.transformer.transform(source_data, month_format=style.month_format)
-        func_codes = [summary.func_code for summary in summaries if summary.func_code != ALL_SHEET_NAME]
-        emit(70, f"ALL 및 Func Code {len(func_codes)}개를 집계했습니다: {', '.join(func_codes)}")
+        if request.report_format == ReportFormat.AR_AP_MONTHLY:
+            emit(50, "AR/AP Type과 월 기준으로 물류코드별 금액을 집계하는 중입니다.")
+            summaries = self.transformer.transform_ar_ap_monthly(source_data, month_format=style.month_format)
+            func_codes = [summary.func_code for summary in summaries]
+            emit(70, f"물류코드 {len(func_codes)}개를 집계했습니다: {', '.join(func_codes)}")
+        else:
+            emit(50, "월, 포트, 거래처 기준으로 금액을 집계하는 중입니다.")
+            summaries = self.transformer.transform(source_data, month_format=style.month_format)
+            func_codes = [summary.func_code for summary in summaries if summary.func_code != ALL_SHEET_NAME]
+            emit(70, f"ALL 및 Func Code {len(func_codes)}개를 집계했습니다: {', '.join(func_codes)}")
 
         LOGGER.info("Number of records: %s", source_data.record_count)
         LOGGER.info("Func Codes found: %s", ", ".join(func_codes))
 
-        report_name = "분석 보고서" if request.report_format == ReportFormat.ANALYTIC else "기본 보고서"
-        emit(85, f"{report_name} 시트를 작성하고 있습니다.")
+        report_name = self._report_name(request.report_format)
+        emit(85, f"{report_name} 시트를 작성하는 중입니다.")
         self.writer.write(request.output_path, source_data, summaries, style, request.report_format)
         emit(100, f"저장 완료: {request.output_path.name}")
         LOGGER.info("Success")
@@ -66,6 +75,14 @@ class ReportGeneratorService:
             summary_sheet_count=len(summaries) + (1 if request.report_format == ReportFormat.ANALYTIC else 0),
             report_format=request.report_format,
         )
+
+    @staticmethod
+    def _report_name(report_format: ReportFormat) -> str:
+        if report_format == ReportFormat.AR_AP_MONTHLY:
+            return "AR/AP 월별 보고서"
+        if report_format == ReportFormat.ANALYTIC:
+            return "요약 보고서"
+        return "기본 보고서"
 
 
 def main() -> int:

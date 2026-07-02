@@ -9,12 +9,13 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import IllegalCharacterError
 
 from .config import ALL_SHEET_NAME, SOURCE_DATA_SHEET_NAME
 from .exceptions import OutputPermissionError
 from .formatter import Formatter, ReportStyle
-from .models import FuncCodeSummary, ReportFormat, WorkbookData
+from .models import ArApFuncCodeSummary, FuncCodeSummary, ReportFormat, WorkbookData
 from .utils import clean_sheet_title
 
 
@@ -31,7 +32,9 @@ class ReportWriter:
         report_format: ReportFormat = ReportFormat.CLASSIC,
     ) -> None:
         workbook = Workbook()
-        if report_format == ReportFormat.ANALYTIC:
+        if report_format == ReportFormat.AR_AP_MONTHLY:
+            self._write_ar_ap_monthly_workbook(workbook, source_data, summaries, style)
+        elif report_format == ReportFormat.ANALYTIC:
             self._write_analytic_workbook(workbook, source_data, summaries, style)
         else:
             self._write_classic_workbook(workbook, source_data, summaries, style)
@@ -59,8 +62,12 @@ class ReportWriter:
         self, workbook: Workbook, source_data: WorkbookData, summaries: list[FuncCodeSummary], style: ReportStyle
     ) -> None:
         func_summaries = [summary for summary in summaries if summary.func_code != ALL_SHEET_NAME]
-        overview = workbook.active
-        overview.title = "Overview"
+        source_sheet = workbook.active
+        source_sheet.title = SOURCE_DATA_SHEET_NAME
+        self._write_raw_data(source_sheet, source_data)
+        self.formatter.style_raw_sheet(source_sheet, enable_filter=True)
+
+        overview = workbook.create_sheet("Overview")
         self._write_overview(overview, source_data, func_summaries, style)
 
         all_sheet = workbook.create_sheet(ALL_SHEET_NAME)
@@ -69,9 +76,123 @@ class ReportWriter:
             sheet = workbook.create_sheet(clean_sheet_title(summary.func_code))
             self._write_summary_sheet(sheet, summary, style)
 
-        source_sheet = workbook.create_sheet(SOURCE_DATA_SHEET_NAME)
+    def _write_ar_ap_monthly_workbook(
+        self,
+        workbook: Workbook,
+        source_data: WorkbookData,
+        summaries: list[ArApFuncCodeSummary],
+        style: ReportStyle,
+    ) -> None:
+        source_sheet = workbook.active
+        source_sheet.title = SOURCE_DATA_SHEET_NAME
         self._write_raw_data(source_sheet, source_data)
         self.formatter.style_raw_sheet(source_sheet, enable_filter=True)
+
+        for summary in summaries:
+            sheet = workbook.create_sheet(clean_sheet_title(summary.func_code))
+            self._write_ar_ap_monthly_sheet(sheet, summary, style)
+
+    def _write_ar_ap_monthly_sheet(
+        self, sheet, summary: ArApFuncCodeSummary, style: ReportStyle
+    ) -> None:
+        sheet.sheet_view.showGridLines = False
+        sheet.freeze_panes = "A5"
+        sheet.sheet_properties.outlinePr.summaryBelow = False
+
+        key_headers = [summary.port_label, "거래처코드", "거래처명"] if summary.port_label else ["거래처코드", "거래처명"]
+        key_headers = [header for header in key_headers if header]
+        key_count = len(key_headers)
+        max_column = key_count + len(summary.months) * 4
+
+        if max_column >= 1:
+            sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_column)
+        sheet.cell(1, 1, f"{summary.func_code} {summary.category} AR/AP 월별 보고서")
+        sheet.cell(2, 1, "기준")
+        sheet.cell(2, 2, f"{summary.port_label} + 거래처" if summary.port_label else "거래처")
+
+        header_fill = PatternFill("solid", fgColor="D9EAF7")
+        month_fill = PatternFill("solid", fgColor="EAF3F8")
+        diff_fill = PatternFill("solid", fgColor="FFF2CC")
+        title_fill = PatternFill("solid", fgColor="1F4E78")
+        border = Border(
+            left=Side(style="thin", color="D6E0EA"),
+            right=Side(style="thin", color="D6E0EA"),
+            top=Side(style="thin", color="D6E0EA"),
+            bottom=Side(style="thin", color="D6E0EA"),
+        )
+        header_font = Font(name="Malgun Gothic", size=10, bold=True, color="1F2937")
+
+        title = sheet.cell(1, 1)
+        title.font = Font(name="Malgun Gothic", size=14, bold=True, color="FFFFFF")
+        title.fill = title_fill
+        title.alignment = Alignment(horizontal="left", vertical="center")
+        sheet.row_dimensions[1].height = 26
+
+        for column, header in enumerate(key_headers, start=1):
+            cell = sheet.cell(3, column, header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+            sheet.merge_cells(start_row=3, start_column=column, end_row=4, end_column=column)
+
+        column = key_count + 1
+        for month in summary.months:
+            sheet.merge_cells(start_row=3, start_column=column, end_row=3, end_column=column + 3)
+            month_cell = sheet.cell(3, column, month)
+            month_cell.fill = month_fill
+            month_cell.font = header_font
+            month_cell.alignment = Alignment(horizontal="center", vertical="center")
+            month_cell.border = border
+            for offset, label in enumerate(("AR계", "AP계", "차이", "마진율")):
+                cell = sheet.cell(4, column + offset, label)
+                cell.fill = diff_fill if label in {"차이", "마진율"} else header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border = border
+            column += 4
+
+        for row_index, row_summary in enumerate(summary.rows, start=5):
+            values = []
+            if summary.port_label:
+                values.append(row_summary.port or "(Blank)")
+            values.extend([row_summary.customer_code, row_summary.customer_name])
+            for column_index, value in enumerate(values, start=1):
+                cell = sheet.cell(row_index, column_index, value)
+                cell.border = border
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+            column = key_count + 1
+            for month in summary.months:
+                amount = row_summary.monthly[month]
+                values = (amount.ar, amount.ap)
+                for offset, number in enumerate(values):
+                    cell = sheet.cell(row_index, column + offset, self._numeric(number))
+                    cell.number_format = style.amount_format
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                ar_ref = sheet.cell(row_index, column).coordinate
+                ap_ref = sheet.cell(row_index, column + 1).coordinate
+                diff_ref = sheet.cell(row_index, column + 2).coordinate
+                diff_cell = sheet.cell(row_index, column + 2, f"={ar_ref}-{ap_ref}")
+                diff_cell.number_format = style.amount_format
+                diff_cell.border = border
+                diff_cell.alignment = Alignment(horizontal="right", vertical="center")
+                margin_cell = sheet.cell(row_index, column + 3)
+                margin_cell.value = f'=IF({ar_ref}=0,IF({diff_ref}=0,"-","N/A"),{diff_ref}/{ar_ref})'
+                margin_cell.number_format = "0.0%"
+                margin_cell.alignment = Alignment(horizontal="right", vertical="center")
+                margin_cell.border = border
+                column += 4
+
+        if sheet.max_row >= 4 and max_column >= 1:
+            sheet.auto_filter.ref = f"A4:{get_column_letter(max_column)}{sheet.max_row}"
+
+        widths = [13, 14, 38] if summary.port_label else [14, 38]
+        for index, width in enumerate(widths, start=1):
+            sheet.column_dimensions[get_column_letter(index)].width = width
+        for column_index in range(key_count + 1, max_column + 1):
+            sheet.column_dimensions[get_column_letter(column_index)].width = 13
 
     def _write_overview(
         self, sheet, source_data: WorkbookData, summaries: list[FuncCodeSummary], style: ReportStyle
