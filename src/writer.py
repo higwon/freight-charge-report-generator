@@ -15,7 +15,7 @@ from openpyxl.utils.exceptions import IllegalCharacterError
 from .config import ALL_SHEET_NAME, SOURCE_DATA_SHEET_NAME
 from .exceptions import OutputPermissionError
 from .formatter import Formatter, ReportStyle
-from .models import ArApFuncCodeSummary, FuncCodeSummary, ReportFormat, WorkbookData
+from .models import ArApFuncCodeSummary, ArApMonthlyAmount, ArApSummaryRow, FuncCodeSummary, ReportFormat, WorkbookData
 from .utils import clean_sheet_title
 
 
@@ -88,6 +88,9 @@ class ReportWriter:
         self._write_raw_data(source_sheet, source_data)
         self.formatter.style_raw_sheet(source_sheet, enable_filter=True)
 
+        overview = workbook.create_sheet("Overview")
+        self._write_ar_ap_overview(overview, source_data, summaries, style)
+
         for summary in summaries:
             sheet = workbook.create_sheet(clean_sheet_title(summary.func_code))
             self._write_ar_ap_monthly_sheet(sheet, summary, style)
@@ -96,13 +99,16 @@ class ReportWriter:
         self, sheet, summary: ArApFuncCodeSummary, style: ReportStyle
     ) -> None:
         sheet.sheet_view.showGridLines = False
-        sheet.freeze_panes = "A5"
+        sheet.freeze_panes = "H12"
         sheet.sheet_properties.outlinePr.summaryBelow = False
 
         key_headers = [summary.port_label, "거래처코드", "거래처명"] if summary.port_label else ["거래처코드", "거래처명"]
         key_headers = [header for header in key_headers if header]
         key_count = len(key_headers)
-        max_column = key_count + len(summary.months) * 4
+        detail_start_row = 10
+        first_data_row = detail_start_row + 2
+        cumulative_headers = ["누적 매출계", "누적 매입계", "누적 차이", "누적 마진율"]
+        max_column = key_count + len(cumulative_headers) + len(summary.months) * 4
 
         if max_column >= 1:
             sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_column)
@@ -113,6 +119,7 @@ class ReportWriter:
         header_fill = PatternFill("solid", fgColor="D9EAF7")
         month_fill = PatternFill("solid", fgColor="EAF3F8")
         diff_fill = PatternFill("solid", fgColor="FFF2CC")
+        summary_fill = PatternFill("solid", fgColor="E2F0D9")
         title_fill = PatternFill("solid", fgColor="1F4E78")
         border = Border(
             left=Side(style="thin", color="D6E0EA"),
@@ -128,31 +135,77 @@ class ReportWriter:
         title.alignment = Alignment(horizontal="left", vertical="center")
         sheet.row_dimensions[1].height = 26
 
+        summary_columns = [2] + list(range(3, 3 + len(summary.months)))
+        sheet.cell(4, 1, "구분")
+        sheet.cell(4, 2, "총 누적")
+        for offset, month in enumerate(summary.months, start=3):
+            sheet.cell(4, offset, month)
+        for row_index, label in enumerate(("매출계", "매입계", "차이", "마진율"), start=5):
+            sheet.cell(row_index, 1, label)
+        total_by_month = self._ar_ap_month_totals(summary)
+        grand_total = self._ar_ap_grand_total(summary)
+        for col in summary_columns:
+            month = None if col == 2 else summary.months[col - 3]
+            amount = grand_total if month is None else total_by_month[month]
+            ar_cell = sheet.cell(5, col, self._numeric(amount.ar))
+            ap_cell = sheet.cell(6, col, self._numeric(amount.ap))
+            diff_cell = sheet.cell(7, col, f"={ar_cell.coordinate}-{ap_cell.coordinate}")
+            margin_cell = sheet.cell(8, col)
+            margin_cell.value = self._margin_formula(ar_cell.coordinate, ap_cell.coordinate, diff_cell.coordinate)
+            for cell in (ar_cell, ap_cell, diff_cell):
+                cell.number_format = style.amount_format
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            margin_cell.number_format = "0.0%"
+            margin_cell.alignment = Alignment(horizontal="right", vertical="center")
+        for row in range(4, 9):
+            for col in range(1, 3 + len(summary.months)):
+                cell = sheet.cell(row, col)
+                cell.fill = summary_fill if row == 4 or col == 1 else PatternFill(fill_type=None)
+                cell.font = header_font if row == 4 or col == 1 else Font(name="Malgun Gothic", size=10, color="111827")
+                cell.border = border
+
         for column, header in enumerate(key_headers, start=1):
-            cell = sheet.cell(3, column, header)
+            cell = sheet.cell(detail_start_row, column, header)
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = border
-            sheet.merge_cells(start_row=3, start_column=column, end_row=4, end_column=column)
+            sub_cell = sheet.cell(detail_start_row + 1, column, header)
+            sub_cell.fill = header_fill
+            sub_cell.font = header_font
+            sub_cell.alignment = Alignment(horizontal="center", vertical="center")
+            sub_cell.border = border
 
         column = key_count + 1
+        for header in cumulative_headers:
+            cell = sheet.cell(detail_start_row, column, header)
+            cell.fill = summary_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+            sub_cell = sheet.cell(detail_start_row + 1, column, header)
+            sub_cell.fill = summary_fill
+            sub_cell.font = header_font
+            sub_cell.alignment = Alignment(horizontal="center", vertical="center")
+            sub_cell.border = border
+            column += 1
+
         for month in summary.months:
-            sheet.merge_cells(start_row=3, start_column=column, end_row=3, end_column=column + 3)
-            month_cell = sheet.cell(3, column, month)
+            sheet.merge_cells(start_row=detail_start_row, start_column=column, end_row=detail_start_row, end_column=column + 3)
+            month_cell = sheet.cell(detail_start_row, column, month)
             month_cell.fill = month_fill
             month_cell.font = header_font
             month_cell.alignment = Alignment(horizontal="center", vertical="center")
             month_cell.border = border
             for offset, label in enumerate(("AR계", "AP계", "차이", "마진율")):
-                cell = sheet.cell(4, column + offset, label)
+                cell = sheet.cell(detail_start_row + 1, column + offset, label)
                 cell.fill = diff_fill if label in {"차이", "마진율"} else header_fill
                 cell.font = header_font
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.border = border
             column += 4
 
-        for row_index, row_summary in enumerate(summary.rows, start=5):
+        for row_index, row_summary in enumerate(summary.rows, start=first_data_row):
             values = []
             if summary.port_label:
                 values.append(row_summary.port or "(Blank)")
@@ -163,6 +216,22 @@ class ReportWriter:
                 cell.alignment = Alignment(horizontal="left", vertical="center")
 
             column = key_count + 1
+            total_ar = sum((row_summary.monthly[month].ar for month in summary.months), Decimal("0"))
+            total_ap = sum((row_summary.monthly[month].ap for month in summary.months), Decimal("0"))
+            ar_cell = sheet.cell(row_index, column, self._numeric(total_ar))
+            ap_cell = sheet.cell(row_index, column + 1, self._numeric(total_ap))
+            diff_cell = sheet.cell(row_index, column + 2, f"={ar_cell.coordinate}-{ap_cell.coordinate}")
+            margin_cell = sheet.cell(row_index, column + 3)
+            margin_cell.value = self._margin_formula(ar_cell.coordinate, ap_cell.coordinate, diff_cell.coordinate)
+            for cell in (ar_cell, ap_cell, diff_cell):
+                cell.number_format = style.amount_format
+                cell.border = border
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            margin_cell.number_format = "0.0%"
+            margin_cell.border = border
+            margin_cell.alignment = Alignment(horizontal="right", vertical="center")
+            column += 4
+
             for month in summary.months:
                 amount = row_summary.monthly[month]
                 values = (amount.ar, amount.ap)
@@ -179,20 +248,574 @@ class ReportWriter:
                 diff_cell.border = border
                 diff_cell.alignment = Alignment(horizontal="right", vertical="center")
                 margin_cell = sheet.cell(row_index, column + 3)
-                margin_cell.value = f'=IF({ar_ref}=0,IF({diff_ref}=0,"-","N/A"),{diff_ref}/{ar_ref})'
+                margin_cell.value = self._margin_formula(ar_ref, ap_ref, diff_ref)
                 margin_cell.number_format = "0.0%"
                 margin_cell.alignment = Alignment(horizontal="right", vertical="center")
                 margin_cell.border = border
                 column += 4
 
-        if sheet.max_row >= 4 and max_column >= 1:
-            sheet.auto_filter.ref = f"A4:{get_column_letter(max_column)}{sheet.max_row}"
+        if sheet.max_row >= detail_start_row + 1 and max_column >= 1:
+            sheet.auto_filter.ref = f"A{detail_start_row + 1}:{get_column_letter(max_column)}{sheet.max_row}"
 
         widths = [13, 14, 38] if summary.port_label else [14, 38]
         for index, width in enumerate(widths, start=1):
             sheet.column_dimensions[get_column_letter(index)].width = width
+        for column_index in range(key_count + 1, key_count + 5):
+            sheet.column_dimensions[get_column_letter(column_index)].width = 14
         for column_index in range(key_count + 1, max_column + 1):
-            sheet.column_dimensions[get_column_letter(column_index)].width = 13
+            sheet.column_dimensions[get_column_letter(column_index)].width = max(
+                sheet.column_dimensions[get_column_letter(column_index)].width or 0, 13
+            )
+        for month_index in range(len(summary.months)):
+            start_col = key_count + 5 + month_index * 4
+            for col in range(start_col, start_col + 4):
+                sheet.column_dimensions[get_column_letter(col)].outlineLevel = 1
+
+    def _write_ar_ap_overview_legacy(
+        self,
+        sheet,
+        source_data: WorkbookData,
+        summaries: list[ArApFuncCodeSummary],
+        style: ReportStyle,
+    ) -> None:
+        sheet.sheet_view.showGridLines = False
+        sheet.freeze_panes = "A6"
+        sheet.merge_cells("A1:K1")
+        sheet["A1"] = "AR/AP Monthly Overview"
+        sheet["A1"].font = Font(name="Malgun Gothic", size=18, bold=True, color="FFFFFF")
+        sheet["A1"].fill = PatternFill("solid", fgColor="1F4E78")
+        sheet["A1"].alignment = Alignment(horizontal="left", vertical="center")
+        sheet.row_dimensions[1].height = 30
+
+        grand_total = self._ar_ap_grand_total_all(summaries)
+        metadata = (
+            ("A3", "원본 시트", "B3", source_data.source_sheet_name),
+            ("D3", "Source 행 수", "E3", source_data.record_count),
+            ("G3", "총 차이", "H3", self._numeric(grand_total.difference)),
+            ("J3", "생성 일시", "K3", datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+        for label_cell, label, value_cell, value in metadata:
+            sheet[label_cell] = label
+            sheet[label_cell].font = Font(name="Malgun Gothic", bold=True, color="44546A")
+            sheet[value_cell] = value
+        sheet["H3"].number_format = style.amount_format
+
+        kpi_rows = [
+            ("총 매출계", grand_total.ar),
+            ("총 매입계", grand_total.ap),
+            ("총 차이", grand_total.difference),
+            ("전체 마진율", self._margin_value(grand_total.ar, grand_total.ap)),
+            ("매출만발생 건수", self._count_margin_status(summaries, "매출만발생")),
+            ("매입만발생 건수", self._count_margin_status(summaries, "매입만발생")),
+            ("마진 음수 건수", self._count_negative_margin(summaries)),
+        ]
+        self._write_ar_ap_kpi_table(sheet, 5, 1, "전체 KPI", kpi_rows, style)
+
+        code_rows = []
+        for summary in summaries:
+            total = self._ar_ap_grand_total(summary)
+            code_rows.append(
+                (
+                    summary.func_code,
+                    summary.category,
+                    total.ar,
+                    total.ap,
+                    total.difference,
+                    self._margin_value(total.ar, total.ap),
+                    len(summary.rows),
+                    len({row.port for row in summary.rows if row.port}),
+                    self._count_margin_status([summary], "매출만발생"),
+                    self._count_margin_status([summary], "매입만발생"),
+                )
+            )
+        self._write_ar_ap_code_table(sheet, 5, 4, code_rows, style)
+
+        month_rows = []
+        for month in sorted({month for summary in summaries for month in summary.months}):
+            total = self._ar_ap_month_total_all(summaries, month)
+            month_rows.append((month, total.ar, total.ap, total.difference, self._margin_value(total.ar, total.ap)))
+        month_end = self._write_ar_ap_month_table(sheet, 5, 15, month_rows, style)
+
+        ports: dict[str, Decimal] = defaultdict(Decimal)
+        customers: dict[str, Decimal] = defaultdict(Decimal)
+        review_rows = []
+        customer_totals: dict[tuple[str, str], ArApMonthlyAmount] = {}
+        for summary in summaries:
+            for row in summary.rows:
+                row_total = self._ar_ap_row_total(row, summary.months)
+                if row.port:
+                    ports[row.port] += row_total.difference
+                customer_key = (row.customer_code, row.customer_name)
+                current = customer_totals.get(customer_key, ArApMonthlyAmount())
+                customer_totals[customer_key] = ArApMonthlyAmount(
+                    ar=current.ar + row_total.ar,
+                    ap=current.ap + row_total.ap,
+                )
+                customers[row.customer_name] += row_total.difference
+                status = self._margin_value(row_total.ar, row_total.ap)
+                if status in {"매출만발생", "매입만발생"} or row_total.difference < 0:
+                    review_rows.append(
+                        (
+                            summary.func_code,
+                            summary.category,
+                            row.port or "",
+                            row.customer_code,
+                            row.customer_name,
+                            row_total.ar,
+                            row_total.ap,
+                            row_total.difference,
+                            status,
+                        )
+                    )
+
+        self._write_overview_table(
+            sheet,
+            17,
+            1,
+            "상위 Port",
+            sorted(ports.items(), key=lambda item: item[1], reverse=True)[:10],
+            style,
+        )
+        self._write_overview_table(
+            sheet,
+            17,
+            4,
+            "상위 Customer",
+            sorted(customers.items(), key=lambda item: item[1], reverse=True)[:10],
+            style,
+        )
+        self._write_ar_ap_review_table(sheet, 17, 7, review_rows[:20], style)
+
+        ranked_customers = [
+            (code, name, total.ar, total.ap, total.difference, self._margin_value(total.ar, total.ap))
+            for (code, name), total in customer_totals.items()
+        ]
+        ranked_customers.sort(key=lambda item: item[4], reverse=True)
+        self._write_ar_ap_rank_table(sheet, 42, 1, "차이 상위 거래처 Top 10", ranked_customers[:10], style)
+        self._write_ar_ap_rank_table(sheet, 42, 8, "차이 하위 거래처 Bottom 10", list(reversed(ranked_customers[-10:])), style)
+
+        if code_rows:
+            chart = BarChart()
+            chart.title = "Func Code별 차이"
+            chart.y_axis.title = "차이"
+            chart.add_data(Reference(sheet, min_col=8, min_row=5, max_row=5 + len(code_rows)), titles_from_data=True)
+            chart.set_categories(Reference(sheet, min_col=4, min_row=6, max_row=5 + len(code_rows)))
+            chart.height = 7
+            chart.width = 12
+            sheet.add_chart(chart, "A58")
+        if month_end >= 6:
+            chart = LineChart()
+            chart.title = "월별 차이 추이"
+            chart.y_axis.title = "차이"
+            chart.add_data(Reference(sheet, min_col=18, min_row=5, max_row=month_end), titles_from_data=True)
+            chart.set_categories(Reference(sheet, min_col=15, min_row=6, max_row=month_end))
+            chart.height = 7
+            chart.width = 12
+            sheet.add_chart(chart, "H58")
+
+        for column_index in range(1, 21):
+            sheet.column_dimensions[get_column_letter(column_index)].width = 15
+        sheet.column_dimensions["E"].width = 22
+        sheet.column_dimensions["K"].width = 34
+        sheet.column_dimensions["L"].width = 14
+
+    def _write_ar_ap_overview(
+        self,
+        sheet,
+        source_data: WorkbookData,
+        summaries: list[ArApFuncCodeSummary],
+        style: ReportStyle,
+    ) -> None:
+        sheet.sheet_view.showGridLines = False
+        sheet.freeze_panes = "A8"
+        sheet.merge_cells("A1:L1")
+        sheet["A1"] = "AR/AP Monthly Overview"
+        sheet["A1"].font = Font(name="Malgun Gothic", size=18, bold=True, color="FFFFFF")
+        sheet["A1"].fill = PatternFill("solid", fgColor="1F4E78")
+        sheet["A1"].alignment = Alignment(horizontal="left", vertical="center")
+        sheet.row_dimensions[1].height = 30
+
+        grand_total = self._ar_ap_grand_total_all(summaries)
+        margin = self._margin_value(grand_total.ar, grand_total.ap)
+        self._write_overview_meta(sheet, source_data, grand_total, style)
+        self._write_overview_cards(
+            sheet,
+            4,
+            [
+                ("총 매출계", grand_total.ar),
+                ("총 매입계", grand_total.ap),
+                ("총 차이", grand_total.difference),
+                ("전체 마진율", margin),
+            ],
+            style,
+        )
+
+        code_rows = []
+        review_rows = []
+        ports: dict[str, Decimal] = defaultdict(Decimal)
+        customers: dict[str, Decimal] = defaultdict(Decimal)
+        for summary in summaries:
+            total = self._ar_ap_grand_total(summary)
+            code_rows.append(
+                (
+                    summary.func_code,
+                    summary.category,
+                    total.ar,
+                    total.ap,
+                    total.difference,
+                    self._margin_value(total.ar, total.ap),
+                    len(summary.rows),
+                    self._count_margin_status([summary], "매출만발생"),
+                    self._count_margin_status([summary], "매입만발생"),
+                )
+            )
+            for row in summary.rows:
+                row_total = self._ar_ap_row_total(row, summary.months)
+                if row.port:
+                    ports[row.port] += row_total.difference
+                customers[row.customer_name] += row_total.difference
+                status = self._margin_value(row_total.ar, row_total.ap)
+                if status in {"매출만발생", "매입만발생"} or row_total.difference < 0:
+                    review_rows.append(
+                        (
+                            summary.func_code,
+                            row.port or "",
+                            row.customer_name,
+                            row_total.ar,
+                            row_total.ap,
+                            row_total.difference,
+                            status,
+                        )
+                    )
+
+        code_end = self._write_ar_ap_compact_code_table(sheet, 8, 1, code_rows, style)
+
+        month_rows = []
+        for month in sorted({month for summary in summaries for month in summary.months}):
+            total = self._ar_ap_month_total_all(summaries, month)
+            month_rows.append((month, total.ar, total.ap, total.difference, self._margin_value(total.ar, total.ap)))
+        month_end = self._write_ar_ap_month_table(sheet, 8, 11, month_rows, style)
+
+        secondary_start = max(code_end, month_end) + 3
+        review_rows.sort(key=lambda item: item[5])
+        self._write_ar_ap_compact_review_table(sheet, secondary_start, 1, review_rows[:12], style)
+
+        top_start = secondary_start
+        self._write_overview_table(
+            sheet,
+            top_start,
+            10,
+            "상위 Port",
+            sorted(ports.items(), key=lambda item: item[1], reverse=True)[:8],
+            style,
+        )
+        self._write_overview_table(
+            sheet,
+            top_start,
+            13,
+            "상위 Customer",
+            sorted(customers.items(), key=lambda item: item[1], reverse=True)[:8],
+            style,
+        )
+        sheet.cell(top_start, 11, "차이")
+        sheet.cell(top_start, 14, "차이")
+
+        if month_end >= 9:
+            chart = LineChart()
+            chart.title = "월별 차이 추이"
+            chart.y_axis.title = "차이"
+            chart.add_data(Reference(sheet, min_col=14, min_row=8, max_row=month_end), titles_from_data=True)
+            chart.set_categories(Reference(sheet, min_col=11, min_row=9, max_row=month_end))
+            chart.height = 7
+            chart.width = 13
+            sheet.add_chart(chart, f"A{secondary_start + 16}")
+
+        widths = {
+            "A": 12,
+            "B": 12,
+            "C": 14,
+            "D": 14,
+            "E": 14,
+            "F": 14,
+            "G": 12,
+            "H": 12,
+            "I": 12,
+            "J": 3,
+            "K": 12,
+            "L": 14,
+            "M": 14,
+            "N": 14,
+            "O": 14,
+            "P": 3,
+            "Q": 18,
+            "R": 34,
+        }
+        for column, width in widths.items():
+            sheet.column_dimensions[column].width = width
+
+    def _write_overview_meta(self, sheet, source_data: WorkbookData, grand_total: ArApMonthlyAmount, style: ReportStyle) -> None:
+        metadata = (
+            ("A3", "원본 시트", "B3", source_data.source_sheet_name),
+            ("D3", "Source 행 수", "E3", source_data.record_count),
+            ("G3", "총 차이", "H3", self._numeric(grand_total.difference)),
+            ("J3", "생성 일시", "K3", datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+        for label_cell, label, value_cell, value in metadata:
+            sheet[label_cell] = label
+            sheet[label_cell].font = Font(name="Malgun Gothic", bold=True, color="44546A")
+            sheet[value_cell] = value
+        sheet["H3"].number_format = style.amount_format
+
+    def _write_overview_cards(self, sheet, row: int, cards, style: ReportStyle) -> None:
+        fills = ("D9EAF7", "E2F0D9", "FFF2CC", "EADCF8")
+        for index, (label, value) in enumerate(cards):
+            col = 1 + index * 3
+            sheet.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col + 1)
+            sheet.merge_cells(start_row=row + 1, start_column=col, end_row=row + 1, end_column=col + 1)
+            label_cell = sheet.cell(row, col, label)
+            value_cell = sheet.cell(row + 1, col)
+            label_cell.fill = PatternFill("solid", fgColor=fills[index % len(fills)])
+            label_cell.font = Font(name="Malgun Gothic", bold=True, color="1F2937")
+            label_cell.alignment = Alignment(horizontal="center", vertical="center")
+            self._write_margin_cell(value_cell, value) if label.endswith("마진율") else self._write_amount_or_text(value_cell, value, style)
+            value_cell.font = Font(name="Malgun Gothic", size=14, bold=True, color="111827")
+            value_cell.fill = PatternFill("solid", fgColor="FFFFFF")
+            for merged_row in (row, row + 1):
+                for merged_col in (col, col + 1):
+                    sheet.cell(merged_row, merged_col).border = Border(
+                        left=Side(style="thin", color="D6E0EA"),
+                        right=Side(style="thin", color="D6E0EA"),
+                        top=Side(style="thin", color="D6E0EA"),
+                        bottom=Side(style="thin", color="D6E0EA"),
+                    )
+
+    def _write_ar_ap_compact_code_table(self, sheet, start_row: int, start_col: int, rows, style: ReportStyle) -> int:
+        headers = ("코드", "구분", "매출계", "매입계", "차이", "마진율", "거래처", "매출만", "매입만")
+        for offset, header in enumerate(headers):
+            sheet.cell(start_row, start_col + offset, header)
+        self._style_table_header(sheet, start_row, start_col, start_col + len(headers) - 1)
+        for row_offset, values in enumerate(rows, start=1):
+            row = start_row + row_offset
+            for col_offset, value in enumerate(values):
+                cell = sheet.cell(row, start_col + col_offset)
+                if col_offset == 5:
+                    self._write_margin_cell(cell, value)
+                else:
+                    self._write_amount_or_text(cell, value, style)
+        return start_row + len(rows)
+
+    def _write_ar_ap_compact_review_table(self, sheet, start_row: int, start_col: int, rows, style: ReportStyle) -> int:
+        headers = ("검토 대상", "항구", "거래처명", "매출계", "매입계", "차이", "상태")
+        for offset, header in enumerate(headers):
+            sheet.cell(start_row, start_col + offset, header)
+        self._style_table_header(sheet, start_row, start_col, start_col + len(headers) - 1)
+        for row_offset, values in enumerate(rows, start=1):
+            row = start_row + row_offset
+            for col_offset, value in enumerate(values):
+                cell = sheet.cell(row, start_col + col_offset)
+                if isinstance(value, Decimal):
+                    cell.value = self._numeric(value)
+                    cell.number_format = style.amount_format
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                else:
+                    cell.value = value
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+        return start_row + len(rows)
+
+    @staticmethod
+    def _write_amount_or_text(cell, value, style: ReportStyle) -> None:
+        if isinstance(value, Decimal):
+            cell.value = ReportWriter._numeric(value)
+            cell.number_format = style.amount_format
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+        else:
+            cell.value = value
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    @staticmethod
+    def _margin_formula(ar_ref: str, ap_ref: str, diff_ref: str) -> str:
+        return (
+            f'=IF(AND({ar_ref}=0,{ap_ref}=0),"-",'
+            f'IF(AND({ar_ref}>0,{ap_ref}=0),"매출만발생",'
+            f'IF(AND({ar_ref}=0,{ap_ref}>0),"매입만발생",{diff_ref}/{ar_ref})))'
+        )
+
+    @staticmethod
+    def _margin_value(ar: Decimal, ap: Decimal) -> Decimal | str:
+        difference = ar - ap
+        if ar == 0 and ap == 0:
+            return "-"
+        if ar > 0 and ap == 0:
+            return "매출만발생"
+        if ar == 0 and ap > 0:
+            return "매입만발생"
+        return difference / ar
+
+    @staticmethod
+    def _ar_ap_row_total(row: ArApSummaryRow, months: list[str]) -> ArApMonthlyAmount:
+        return ArApMonthlyAmount(
+            ar=sum((row.monthly[month].ar for month in months), Decimal("0")),
+            ap=sum((row.monthly[month].ap for month in months), Decimal("0")),
+        )
+
+    def _ar_ap_grand_total(self, summary: ArApFuncCodeSummary) -> ArApMonthlyAmount:
+        return ArApMonthlyAmount(
+            ar=sum((self._ar_ap_row_total(row, summary.months).ar for row in summary.rows), Decimal("0")),
+            ap=sum((self._ar_ap_row_total(row, summary.months).ap for row in summary.rows), Decimal("0")),
+        )
+
+    def _ar_ap_grand_total_all(self, summaries: list[ArApFuncCodeSummary]) -> ArApMonthlyAmount:
+        return ArApMonthlyAmount(
+            ar=sum((self._ar_ap_grand_total(summary).ar for summary in summaries), Decimal("0")),
+            ap=sum((self._ar_ap_grand_total(summary).ap for summary in summaries), Decimal("0")),
+        )
+
+    @staticmethod
+    def _ar_ap_month_totals(summary: ArApFuncCodeSummary) -> dict[str, ArApMonthlyAmount]:
+        return {
+            month: ArApMonthlyAmount(
+                ar=sum((row.monthly[month].ar for row in summary.rows), Decimal("0")),
+                ap=sum((row.monthly[month].ap for row in summary.rows), Decimal("0")),
+            )
+            for month in summary.months
+        }
+
+    @staticmethod
+    def _ar_ap_month_total_all(summaries: list[ArApFuncCodeSummary], month: str) -> ArApMonthlyAmount:
+        return ArApMonthlyAmount(
+            ar=sum(
+                (row.monthly[month].ar for summary in summaries if month in summary.months for row in summary.rows),
+                Decimal("0"),
+            ),
+            ap=sum(
+                (row.monthly[month].ap for summary in summaries if month in summary.months for row in summary.rows),
+                Decimal("0"),
+            ),
+        )
+
+    def _count_margin_status(self, summaries: list[ArApFuncCodeSummary], status: str) -> int:
+        count = 0
+        for summary in summaries:
+            for row in summary.rows:
+                total = self._ar_ap_row_total(row, summary.months)
+                if self._margin_value(total.ar, total.ap) == status:
+                    count += 1
+        return count
+
+    def _count_negative_margin(self, summaries: list[ArApFuncCodeSummary]) -> int:
+        count = 0
+        for summary in summaries:
+            for row in summary.rows:
+                total = self._ar_ap_row_total(row, summary.months)
+                if total.ar > 0 and total.difference < 0:
+                    count += 1
+        return count
+
+    @staticmethod
+    def _style_table_header(sheet, row: int, start_col: int, end_col: int) -> None:
+        fill = PatternFill("solid", fgColor="D9EAF7")
+        border = Border(bottom=Side(style="thin", color="9EB6CE"))
+        for col in range(start_col, end_col + 1):
+            cell = sheet.cell(row, col)
+            cell.font = Font(name="Malgun Gothic", bold=True, color="1F2937")
+            cell.fill = fill
+            cell.border = border
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    @staticmethod
+    def _write_margin_cell(cell, value: Decimal | str) -> None:
+        cell.value = ReportWriter._numeric(value) if isinstance(value, Decimal) else value
+        cell.number_format = "0.0%" if isinstance(value, Decimal) else "General"
+        cell.alignment = Alignment(horizontal="right" if isinstance(value, Decimal) else "center", vertical="center")
+
+    def _write_ar_ap_kpi_table(self, sheet, start_row: int, start_col: int, title: str, rows, style: ReportStyle) -> int:
+        sheet.cell(start_row, start_col, title)
+        sheet.cell(start_row, start_col + 1, "값")
+        self._style_table_header(sheet, start_row, start_col, start_col + 1)
+        for offset, (label, value) in enumerate(rows, start=1):
+            row = start_row + offset
+            sheet.cell(row, start_col, label)
+            value_cell = sheet.cell(row, start_col + 1)
+            if isinstance(value, Decimal):
+                value_cell.value = self._numeric(value)
+                value_cell.number_format = "0.0%" if abs(value) <= 1 and "마진율" in label else style.amount_format
+                value_cell.alignment = Alignment(horizontal="right", vertical="center")
+            else:
+                value_cell.value = value
+        return start_row + len(rows)
+
+    def _write_ar_ap_code_table(self, sheet, start_row: int, start_col: int, rows, style: ReportStyle) -> int:
+        headers = ("Func Code", "구분", "매출계", "매입계", "차이", "마진율", "거래처 수", "항구 수", "매출만", "매입만")
+        for offset, header in enumerate(headers):
+            sheet.cell(start_row, start_col + offset, header)
+        self._style_table_header(sheet, start_row, start_col, start_col + len(headers) - 1)
+        for row_offset, values in enumerate(rows, start=1):
+            row = start_row + row_offset
+            for col_offset, value in enumerate(values):
+                cell = sheet.cell(row, start_col + col_offset)
+                if col_offset == 5:
+                    self._write_margin_cell(cell, value)
+                elif isinstance(value, Decimal):
+                    cell.value = self._numeric(value)
+                    cell.number_format = style.amount_format
+                else:
+                    cell.value = value
+        return start_row + len(rows)
+
+    def _write_ar_ap_month_table(self, sheet, start_row: int, start_col: int, rows, style: ReportStyle) -> int:
+        headers = ("월", "매출계", "매입계", "차이", "마진율")
+        for offset, header in enumerate(headers):
+            sheet.cell(start_row, start_col + offset, header)
+        self._style_table_header(sheet, start_row, start_col, start_col + len(headers) - 1)
+        for row_offset, values in enumerate(rows, start=1):
+            row = start_row + row_offset
+            for col_offset, value in enumerate(values):
+                cell = sheet.cell(row, start_col + col_offset)
+                if col_offset == 4:
+                    self._write_margin_cell(cell, value)
+                elif isinstance(value, Decimal):
+                    cell.value = self._numeric(value)
+                    cell.number_format = style.amount_format
+                else:
+                    cell.value = value
+        return start_row + len(rows)
+
+    def _write_ar_ap_review_table(self, sheet, start_row: int, start_col: int, rows, style: ReportStyle) -> int:
+        headers = ("검토", "코드", "구분", "항구", "거래처코드", "거래처명", "매출계", "매입계", "차이", "상태")
+        sheet.cell(start_row, start_col, "검토 대상")
+        self._style_table_header(sheet, start_row, start_col, start_col + len(headers) - 1)
+        for offset, header in enumerate(headers[1:], start=1):
+            sheet.cell(start_row, start_col + offset, header)
+        for row_offset, values in enumerate(rows, start=1):
+            row = start_row + row_offset
+            for col_offset, value in enumerate(values, start=1):
+                cell = sheet.cell(row, start_col + col_offset)
+                if isinstance(value, Decimal):
+                    cell.value = self._numeric(value)
+                    cell.number_format = style.amount_format
+                else:
+                    cell.value = value
+        return start_row + len(rows)
+
+    def _write_ar_ap_rank_table(self, sheet, start_row: int, start_col: int, title: str, rows, style: ReportStyle) -> int:
+        headers = (title, "거래처명", "매출계", "매입계", "차이", "마진율")
+        for offset, header in enumerate(headers):
+            sheet.cell(start_row, start_col + offset, header)
+        self._style_table_header(sheet, start_row, start_col, start_col + len(headers) - 1)
+        for row_offset, (code, name, ar, ap, difference, margin) in enumerate(rows, start=1):
+            row = start_row + row_offset
+            values = (code, name, ar, ap, difference, margin)
+            for col_offset, value in enumerate(values):
+                cell = sheet.cell(row, start_col + col_offset)
+                if col_offset == 5:
+                    self._write_margin_cell(cell, value)
+                elif isinstance(value, Decimal):
+                    cell.value = self._numeric(value)
+                    cell.number_format = style.amount_format
+                else:
+                    cell.value = value
+        return start_row + len(rows)
+
 
     def _write_overview(
         self, sheet, source_data: WorkbookData, summaries: list[FuncCodeSummary], style: ReportStyle

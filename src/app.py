@@ -72,7 +72,8 @@ class ReportGeneratorService:
             record_count=source_data.record_count,
             source_sheet_name=source_data.source_sheet_name,
             func_codes=func_codes,
-            summary_sheet_count=len(summaries) + (1 if request.report_format == ReportFormat.ANALYTIC else 0),
+            summary_sheet_count=len(summaries)
+            + (1 if request.report_format in {ReportFormat.ANALYTIC, ReportFormat.AR_AP_MONTHLY} else 0),
             report_format=request.report_format,
         )
 
