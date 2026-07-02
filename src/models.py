@@ -13,6 +13,7 @@ Row = list[Any]
 class WorkbookData:
     headers: list[str]
     rows: list[Row]
+    source_sheet_name: str = ""
 
     @property
     def record_count(self) -> int:
@@ -56,5 +57,6 @@ class GenerationRequest:
 class GenerationResult:
     output_path: Path
     record_count: int
+    source_sheet_name: str
     func_codes: list[str]
     summary_sheet_count: int

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 from .config import LOG_FILE
@@ -29,3 +30,8 @@ def ensure_xlsx_suffix(filename: str) -> str:
 
 def display_path(path: Path) -> str:
     return str(path.expanduser().resolve())
+
+
+def resource_path(relative_path: str) -> Path:
+    base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    return base_path / relative_path

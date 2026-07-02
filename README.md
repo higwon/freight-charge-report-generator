@@ -4,10 +4,11 @@ Python desktop application for generating formatted freight charge summary repor
 
 ## Features
 
-- Reads the `LV1DOC` worksheet from `.xls`, `.xlsx`, and Excel 2003 XML Spreadsheet files.
-- Creates `RawData` with all source worksheet values.
-- Creates one summary worksheet per non-empty `Func Code`.
+- Finds the source worksheet by required column headers in `.xls`, `.xlsx`, and Excel 2003 XML Spreadsheet files.
+- Creates `Source` with all detected source worksheet values.
+- Creates `ALL` plus `AE`, `AI`, `OA`, `OE`, and `OI` summary worksheets.
 - Groups summaries by Month, Port, and Customer Name.
+- Adds Excel outline controls for expanding and collapsing Month and Port details.
 - Applies the port selection rules from the specification.
 - Applies the built-in pivot-style report formatting without requiring a sample workbook.
 - Provides a PySide6 desktop UI with detailed progress, result summary, dialogs, output-file opening, and output-folder opening.
@@ -41,8 +42,8 @@ GitHub Actions builds a Windows zip artifact on pushes to `main`, pull requests,
 To publish a release, push a version tag:
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Tags matching `v*` create a GitHub Release and attach the Windows zip package.
@@ -51,10 +52,11 @@ Tags matching `v*` create a GitHub Release and attach the Windows zip package.
 
 The generated workbook contains:
 
-- `RawData`: every row and column from `LV1DOC`.
-- One sheet per Func Code, for example `AE`, `AI`, `OA`, `OE`, `OI`.
+- `Source`: every row and column from the automatically detected source worksheet.
+- `ALL`: the combined total for AE, AI, OA, OE, and OI.
+- One sheet per supported Func Code: `AE`, `AI`, `OA`, `OE`, `OI`.
 
-Each Func Code sheet follows this hierarchy:
+Each summary sheet follows this expandable hierarchy:
 
 ```text
 Month

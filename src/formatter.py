@@ -41,6 +41,8 @@ class Formatter:
 
     def apply_sheet_layout(self, worksheet: Worksheet, style: ReportStyle) -> None:
         worksheet.sheet_view.showGridLines = False
+        worksheet.sheet_view.showOutlineSymbols = True
+        worksheet.sheet_properties.outlinePr.summaryBelow = False
         worksheet.freeze_panes = "A4"
         for column, width in style.column_widths.items():
             worksheet.column_dimensions[column].width = width

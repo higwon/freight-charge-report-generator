@@ -1,5 +1,13 @@
 # Release Notes
 
+## v0.2.0
+
+- Detects the source worksheet by required column headers instead of a fixed sheet name.
+- Renames `RawData` to `Source` and adds an `ALL` summary sheet.
+- Adds expandable Month and Port outline levels to summary sheets.
+- Adds application branding, version/author metadata, and success/failure result images.
+- Refreshes the UI with clearer progress stages and Korean action labels.
+
 ## v0.1.0
 
 - Initial desktop app for generating freight charge summary reports from `LV1DOC`.

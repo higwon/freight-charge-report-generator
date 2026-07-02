@@ -7,7 +7,7 @@ env/
 
 logs/*.log
 result.xlsx
-output/*.xlsx
+output/
 
 build/
 dist/

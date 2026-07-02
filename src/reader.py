@@ -7,7 +7,7 @@ import zipfile
 
 from openpyxl import load_workbook
 
-from .config import SOURCE_SHEET_NAME
+from .config import BusinessRules, HEADER_SCAN_ROW_LIMIT
 from .exceptions import MissingInputFileError, MissingWorksheetError
 from .models import WorkbookData
 
@@ -15,26 +15,48 @@ SS_NS = "{urn:schemas-microsoft-com:office:spreadsheet}"
 
 
 class SourceWorkbookReader:
-    def read(self, path: Path, sheet_name: str = SOURCE_SHEET_NAME) -> WorkbookData:
+    def __init__(self, rules: BusinessRules | None = None) -> None:
+        self.rules = rules or BusinessRules()
+
+    def read(self, path: Path) -> WorkbookData:
         if not path.exists():
             raise MissingInputFileError(f"입력 파일을 찾을 수 없습니다: {path}")
 
         if self._is_excel_xml(path):
-            return self._read_excel_xml(path, sheet_name)
+            sheet_name, header_row = self._find_excel_xml_source(path)
+            return self._read_excel_xml(path, sheet_name, header_row)
         if zipfile.is_zipfile(path):
-            return self._read_xlsx(path, sheet_name)
-        return self._read_xls(path, sheet_name)
+            return self._read_xlsx(path)
+        return self._read_xls(path)
 
     @staticmethod
     def _is_excel_xml(path: Path) -> bool:
         with path.open("rb") as file:
             return file.read(64).lstrip().startswith(b"<?xml")
 
-    def _read_excel_xml(self, path: Path, sheet_name: str) -> WorkbookData:
+    def _find_excel_xml_source(self, path: Path) -> tuple[str, int]:
+        candidates: list[tuple[str, int]] = []
+        current_sheet = ""
+        row_number = 0
+        for event, elem in ET.iterparse(path, events=("start", "end")):
+            if event == "start" and elem.tag.endswith("Worksheet"):
+                current_sheet = elem.attrib.get(f"{SS_NS}Name", "")
+                row_number = 0
+            elif event == "end" and elem.tag.endswith("Row"):
+                row_number += 1
+                if row_number <= HEADER_SCAN_ROW_LIMIT:
+                    values = self._xml_row_values(elem)
+                    if self._is_header_row(values):
+                        candidates.append((current_sheet, row_number))
+                elem.clear()
+        return self._select_candidate(candidates)
+
+    def _read_excel_xml(self, path: Path, sheet_name: str, header_row: int) -> WorkbookData:
         headers: list[str] | None = None
         rows: list[list[Any]] = []
         found_sheet = False
         in_target = False
+        row_number = 0
 
         for event, elem in ET.iterparse(path, events=("start", "end")):
             if event == "start" and elem.tag.endswith("Worksheet"):
@@ -42,16 +64,17 @@ class SourceWorkbookReader:
                 in_target = current == sheet_name
                 found_sheet = found_sheet or in_target
             elif in_target and event == "end" and elem.tag.endswith("Row"):
+                row_number += 1
                 values = self._xml_row_values(elem)
-                if headers is None:
+                if row_number == header_row:
                     headers = ["" if value is None else str(value) for value in values]
-                else:
+                elif row_number > header_row:
                     rows.append(values)
                 elem.clear()
 
         if not found_sheet or headers is None:
             raise MissingWorksheetError(f"원본 파일에 '{sheet_name}' 시트가 없습니다.")
-        return WorkbookData(headers=headers, rows=rows)
+        return WorkbookData(headers=headers, rows=rows, source_sheet_name=sheet_name)
 
     @staticmethod
     def _xml_row_values(row: ET.Element) -> list[Any]:
@@ -76,32 +99,65 @@ class SourceWorkbookReader:
                 return child.text
         return None
 
-    @staticmethod
-    def _read_xlsx(path: Path, sheet_name: str) -> WorkbookData:
+    def _read_xlsx(self, path: Path) -> WorkbookData:
         workbook = load_workbook(path, data_only=True, read_only=True)
-        if sheet_name not in workbook.sheetnames:
-            raise MissingWorksheetError(f"원본 파일에 '{sheet_name}' 시트가 없습니다.")
+        candidates: list[tuple[str, int]] = []
+        for worksheet in workbook.worksheets:
+            for row_number, row in enumerate(
+                worksheet.iter_rows(min_row=1, max_row=HEADER_SCAN_ROW_LIMIT, values_only=True), start=1
+            ):
+                if self._is_header_row(list(row)):
+                    candidates.append((worksheet.title, row_number))
+                    break
+        sheet_name, header_row = self._select_candidate(candidates)
         sheet = workbook[sheet_name]
-        iterator = sheet.iter_rows(values_only=True)
+        iterator = sheet.iter_rows(min_row=header_row, values_only=True)
         try:
             headers = ["" if value is None else str(value) for value in next(iterator)]
         except StopIteration as exc:
             raise MissingWorksheetError(f"'{sheet_name}' 시트가 비어 있습니다.") from exc
-        return WorkbookData(headers=headers, rows=[list(row) for row in iterator])
+        return WorkbookData(headers=headers, rows=[list(row) for row in iterator], source_sheet_name=sheet_name)
 
-    @staticmethod
-    def _read_xls(path: Path, sheet_name: str) -> WorkbookData:
+    def _read_xls(self, path: Path) -> WorkbookData:
         try:
             import xlrd
         except ImportError as exc:
             raise MissingInputFileError("구형 .xls 파일을 읽으려면 xlrd가 필요합니다.") from exc
 
         workbook = xlrd.open_workbook(str(path))
-        if sheet_name not in workbook.sheet_names():
-            raise MissingWorksheetError(f"원본 파일에 '{sheet_name}' 시트가 없습니다.")
+        candidates: list[tuple[str, int]] = []
+        for name in workbook.sheet_names():
+            candidate_sheet = workbook.sheet_by_name(name)
+            for row_index in range(min(candidate_sheet.nrows, HEADER_SCAN_ROW_LIMIT)):
+                if self._is_header_row(candidate_sheet.row_values(row_index)):
+                    candidates.append((name, row_index + 1))
+                    break
+        sheet_name, header_row = self._select_candidate(candidates)
         sheet = workbook.sheet_by_name(sheet_name)
         if sheet.nrows == 0:
             raise MissingWorksheetError(f"'{sheet_name}' 시트가 비어 있습니다.")
-        headers = ["" if value is None else str(value) for value in sheet.row_values(0)]
-        rows = [sheet.row_values(index) for index in range(1, sheet.nrows)]
-        return WorkbookData(headers=headers, rows=rows)
+        header_index = header_row - 1
+        headers = ["" if value is None else str(value) for value in sheet.row_values(header_index)]
+        rows = [sheet.row_values(index) for index in range(header_index + 1, sheet.nrows)]
+        return WorkbookData(headers=headers, rows=rows, source_sheet_name=sheet_name)
+
+    def _is_header_row(self, values: list[Any]) -> bool:
+        normalized = {self._normalize_header(value) for value in values if value not in (None, "")}
+        required = {self._normalize_header(value) for value in self.rules.required_columns}
+        return required.issubset(normalized)
+
+    @staticmethod
+    def _normalize_header(value: Any) -> str:
+        return " ".join(str(value).replace("\ufeff", "").split()).casefold()
+
+    @staticmethod
+    def _select_candidate(candidates: list[tuple[str, int]]) -> tuple[str, int]:
+        if not candidates:
+            raise MissingWorksheetError(
+                "필수 컬럼을 모두 포함한 Source 시트를 찾지 못했습니다. "
+                "필요 컬럼: Job Date, Func Code, Arrival Port, Depart Port, Customer Name, Loc Amt"
+            )
+        if len(candidates) > 1:
+            names = ", ".join(f"{name}({row}행)" for name, row in candidates)
+            raise MissingWorksheetError(f"Source 후보 시트가 여러 개입니다: {names}")
+        return candidates[0]

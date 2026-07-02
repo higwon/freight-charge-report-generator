@@ -7,7 +7,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.utils.exceptions import IllegalCharacterError
 
-from .config import RAW_DATA_SHEET_NAME
+from .config import SOURCE_DATA_SHEET_NAME
 from .exceptions import OutputPermissionError
 from .formatter import Formatter, ReportStyle
 from .models import FuncCodeSummary, WorkbookData
@@ -26,10 +26,10 @@ class ReportWriter:
         style: ReportStyle,
     ) -> None:
         workbook = Workbook()
-        raw_sheet = workbook.active
-        raw_sheet.title = RAW_DATA_SHEET_NAME
-        self._write_raw_data(raw_sheet, source_data)
-        self.formatter.style_raw_sheet(raw_sheet)
+        source_sheet = workbook.active
+        source_sheet.title = SOURCE_DATA_SHEET_NAME
+        self._write_raw_data(source_sheet, source_data)
+        self.formatter.style_raw_sheet(source_sheet)
 
         for summary in summaries:
             sheet = workbook.create_sheet(clean_sheet_title(summary.func_code))
@@ -64,11 +64,13 @@ class ReportWriter:
 
         row_index = 4
         for month in summary.months:
+            month_row = row_index
             sheet.cell(row=row_index, column=1, value=month.label)
             sheet.cell(row=row_index, column=2, value=self._numeric(month.amount))
             self.formatter.style_row(sheet, row_index, "month", style)
             row_index += 1
             for port in month.ports:
+                port_row = row_index
                 sheet.cell(row=row_index, column=1, value=port.name)
                 sheet.cell(row=row_index, column=2, value=self._numeric(port.amount))
                 self.formatter.style_row(sheet, row_index, "port", style)
@@ -77,7 +79,9 @@ class ReportWriter:
                     sheet.cell(row=row_index, column=1, value=customer.name)
                     sheet.cell(row=row_index, column=2, value=self._numeric(customer.amount))
                     self.formatter.style_row(sheet, row_index, "customer", style)
+                    sheet.row_dimensions[row_index].outlineLevel = 2
                     row_index += 1
+                sheet.row_dimensions[port_row].outlineLevel = 1
 
         sheet.cell(row=row_index, column=1, value="총합계")
         sheet.cell(row=row_index, column=2, value=self._numeric(summary.amount))
