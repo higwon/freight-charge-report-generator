@@ -109,6 +109,9 @@ class ReportWriter:
         first_data_row = detail_start_row + 2
         cumulative_headers = ["누적 매출계", "누적 매입계", "누적 차이", "누적 마진율"]
         max_column = key_count + len(cumulative_headers) + len(summary.months) * 4
+        rank_first_column = 4 + len(summary.months)
+        rank_last_column = rank_first_column + (10 if summary.port_label else 4)
+        max_column = max(max_column, rank_last_column)
 
         if max_column >= 1:
             sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_column)
@@ -164,12 +167,35 @@ class ReportWriter:
                 cell.font = header_font if row == 4 or col == 1 else Font(name="Malgun Gothic", size=10, color="111827")
                 cell.border = border
 
+        rank_start_col = rank_first_column
+        rank_tables = self._ar_ap_rankings(summary)
+        if summary.port_label:
+            self._write_amount_rank_table(
+                sheet, 4, rank_start_col, "매출 상위 Port", rank_tables["port_ar"], style
+            )
+            self._write_amount_rank_table(
+                sheet, 4, rank_start_col + 3, "매입 상위 Port", rank_tables["port_ap"], style
+            )
+            rank_start_col += 6
+        self._write_amount_rank_table(
+            sheet, 4, rank_start_col, "매출 상위 Customer", rank_tables["customer_ar"], style
+        )
+        self._write_amount_rank_table(
+            sheet, 4, rank_start_col + 3, "매입 상위 Customer", rank_tables["customer_ap"], style
+        )
+
+        sheet.merge_cells(
+            start_row=detail_start_row,
+            start_column=1,
+            end_row=detail_start_row,
+            end_column=key_count,
+        )
+        key_group_cell = sheet.cell(detail_start_row, 1, "기본정보")
+        key_group_cell.fill = header_fill
+        key_group_cell.font = header_font
+        key_group_cell.alignment = Alignment(horizontal="center", vertical="center")
+        key_group_cell.border = border
         for column, header in enumerate(key_headers, start=1):
-            cell = sheet.cell(detail_start_row, column, header)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            cell.border = border
             sub_cell = sheet.cell(detail_start_row + 1, column, header)
             sub_cell.fill = header_fill
             sub_cell.font = header_font
@@ -177,12 +203,18 @@ class ReportWriter:
             sub_cell.border = border
 
         column = key_count + 1
+        sheet.merge_cells(
+            start_row=detail_start_row,
+            start_column=column,
+            end_row=detail_start_row,
+            end_column=column + len(cumulative_headers) - 1,
+        )
+        cumulative_group_cell = sheet.cell(detail_start_row, column, "누적 합계")
+        cumulative_group_cell.fill = summary_fill
+        cumulative_group_cell.font = header_font
+        cumulative_group_cell.alignment = Alignment(horizontal="center", vertical="center")
+        cumulative_group_cell.border = border
         for header in cumulative_headers:
-            cell = sheet.cell(detail_start_row, column, header)
-            cell.fill = summary_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            cell.border = border
             sub_cell = sheet.cell(detail_start_row + 1, column, header)
             sub_cell.fill = summary_fill
             sub_cell.font = header_font
@@ -270,6 +302,50 @@ class ReportWriter:
             start_col = key_count + 5 + month_index * 4
             for col in range(start_col, start_col + 4):
                 sheet.column_dimensions[get_column_letter(col)].outlineLevel = 1
+
+    def _ar_ap_rankings(self, summary: ArApFuncCodeSummary) -> dict[str, list[tuple[str, Decimal]]]:
+        port_ar: dict[str, Decimal] = defaultdict(Decimal)
+        port_ap: dict[str, Decimal] = defaultdict(Decimal)
+        customer_ar: dict[str, Decimal] = defaultdict(Decimal)
+        customer_ap: dict[str, Decimal] = defaultdict(Decimal)
+        for row in summary.rows:
+            total = self._ar_ap_row_total(row, summary.months)
+            if row.port:
+                port_ar[row.port] += total.ar
+                port_ap[row.port] += total.ap
+            customer_label = row.customer_name or row.customer_code or "(Blank)"
+            customer_ar[customer_label] += total.ar
+            customer_ap[customer_label] += total.ap
+
+        def top(values: dict[str, Decimal], limit: int = 5) -> list[tuple[str, Decimal]]:
+            return sorted(values.items(), key=lambda item: item[1], reverse=True)[:limit]
+
+        return {
+            "port_ar": top(port_ar),
+            "port_ap": top(port_ap),
+            "customer_ar": top(customer_ar),
+            "customer_ap": top(customer_ap),
+        }
+
+    def _write_amount_rank_table(
+        self, sheet, start_row: int, start_col: int, title: str, rows, style: ReportStyle
+    ) -> int:
+        sheet.cell(start_row, start_col, title)
+        sheet.cell(start_row, start_col + 1, "금액")
+        self._style_table_header(sheet, start_row, start_col, start_col + 1)
+        for offset, (label, amount) in enumerate(rows, start=1):
+            row = start_row + offset
+            sheet.cell(row, start_col, label)
+            amount_cell = sheet.cell(row, start_col + 1, self._numeric(amount))
+            amount_cell.number_format = style.amount_format
+            amount_cell.alignment = Alignment(horizontal="right", vertical="center")
+        sheet.column_dimensions[get_column_letter(start_col)].width = max(
+            sheet.column_dimensions[get_column_letter(start_col)].width or 0, 22
+        )
+        sheet.column_dimensions[get_column_letter(start_col + 1)].width = max(
+            sheet.column_dimensions[get_column_letter(start_col + 1)].width or 0, 14
+        )
+        return start_row + len(rows)
 
     def _write_ar_ap_overview_legacy(
         self,
@@ -452,8 +528,10 @@ class ReportWriter:
 
         code_rows = []
         review_rows = []
-        ports: dict[str, Decimal] = defaultdict(Decimal)
-        customers: dict[str, Decimal] = defaultdict(Decimal)
+        port_ar: dict[str, Decimal] = defaultdict(Decimal)
+        port_ap: dict[str, Decimal] = defaultdict(Decimal)
+        customer_ar: dict[str, Decimal] = defaultdict(Decimal)
+        customer_ap: dict[str, Decimal] = defaultdict(Decimal)
         for summary in summaries:
             total = self._ar_ap_grand_total(summary)
             code_rows.append(
@@ -472,8 +550,11 @@ class ReportWriter:
             for row in summary.rows:
                 row_total = self._ar_ap_row_total(row, summary.months)
                 if row.port:
-                    ports[row.port] += row_total.difference
-                customers[row.customer_name] += row_total.difference
+                    port_ar[row.port] += row_total.ar
+                    port_ap[row.port] += row_total.ap
+                customer_label = row.customer_name or row.customer_code or "(Blank)"
+                customer_ar[customer_label] += row_total.ar
+                customer_ap[customer_label] += row_total.ap
                 status = self._margin_value(row_total.ar, row_total.ap)
                 if status in {"매출만발생", "매입만발생"} or row_total.difference < 0:
                     review_rows.append(
@@ -505,20 +586,38 @@ class ReportWriter:
             sheet,
             top_start,
             10,
-            "상위 Port",
-            sorted(ports.items(), key=lambda item: item[1], reverse=True)[:8],
+            "매출 상위 Port",
+            sorted(port_ar.items(), key=lambda item: item[1], reverse=True)[:10],
             style,
         )
         self._write_overview_table(
             sheet,
             top_start,
             13,
-            "상위 Customer",
-            sorted(customers.items(), key=lambda item: item[1], reverse=True)[:8],
+            "매입 상위 Port",
+            sorted(port_ap.items(), key=lambda item: item[1], reverse=True)[:10],
             style,
         )
-        sheet.cell(top_start, 11, "차이")
-        sheet.cell(top_start, 14, "차이")
+        customer_top_start = top_start + 12
+        self._write_overview_table(
+            sheet,
+            customer_top_start,
+            10,
+            "매출 상위 Customer",
+            sorted(customer_ar.items(), key=lambda item: item[1], reverse=True)[:10],
+            style,
+        )
+        self._write_overview_table(
+            sheet,
+            customer_top_start,
+            13,
+            "매입 상위 Customer",
+            sorted(customer_ap.items(), key=lambda item: item[1], reverse=True)[:10],
+            style,
+        )
+        for header_col in (11, 14):
+            sheet.cell(top_start, header_col, "금액")
+            sheet.cell(customer_top_start, header_col, "금액")
 
         if month_end >= 9:
             chart = LineChart()
@@ -528,7 +627,7 @@ class ReportWriter:
             chart.set_categories(Reference(sheet, min_col=11, min_row=9, max_row=month_end))
             chart.height = 7
             chart.width = 13
-            sheet.add_chart(chart, f"A{secondary_start + 16}")
+            sheet.add_chart(chart, f"A{secondary_start + 25}")
 
         widths = {
             "A": 12,
