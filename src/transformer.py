@@ -153,15 +153,13 @@ class ReportTransformer:
         if missing:
             raise MissingRequiredColumnsError(f"필수 열이 없습니다: {', '.join(missing)}")
 
-    @staticmethod
-    def _header_index(headers: list[str]) -> dict[str, int]:
-        expected_names = set(BusinessRules().required_columns) | {"Customer Code"}
-        expected = {" ".join(name.split()).casefold(): name for name in expected_names}
+    def _header_index(self, headers: list[str]) -> dict[str, int]:
+        expected_names = set(self.rules.required_columns) | {"Customer Code"}
         result: dict[str, int] = {}
         for position, header in enumerate(headers):
-            normalized = " ".join(str(header).replace("\ufeff", "").split()).casefold()
-            if normalized in expected:
-                result[expected[normalized]] = position
+            canonical = self.rules.canonical_column_name(header)
+            if canonical in expected_names and canonical not in result:
+                result[canonical] = position
         return result
 
     @staticmethod

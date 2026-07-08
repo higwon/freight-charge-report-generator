@@ -161,20 +161,28 @@ class SourceWorkbookReader:
         return WorkbookData(headers=headers, rows=rows, source_sheet_name=sheet_name)
 
     def _is_header_row(self, values: list[Any]) -> bool:
-        normalized = {self._normalize_header(value) for value in values if value not in (None, "")}
-        required = {self._normalize_header(value) for value in self.rules.required_columns}
-        return required.issubset(normalized)
+        canonical = {
+            column
+            for value in values
+            if value not in (None, "")
+            for column in [self.rules.canonical_column_name(value)]
+            if column
+        }
+        return set(self.rules.required_columns).issubset(canonical)
 
     @staticmethod
     def _normalize_header(value: Any) -> str:
-        return " ".join(str(value).replace("\ufeff", "").split()).casefold()
+        return BusinessRules.normalize_header(value)
 
     @staticmethod
     def _select_candidate(candidates: list[tuple[str, int]]) -> tuple[str, int]:
         if not candidates:
             raise MissingWorksheetError(
                 "필수 컬럼을 모두 포함한 Source 시트를 찾지 못했습니다. "
-                "필요 컬럼: Job Date, Func Code, Arrival Port, Depart Port, Customer Name, Loc Amt"
+                "필요 컬럼: Job Date, Func Code, Arrival Port, Depart Port, "
+                "AR / AP Type, Customer Name, Loc Amt "
+                "(한국어 헤더: JOB일자, 기능코드, 도착지포트, 출발지포트, "
+                "매출매입구분, 거래처명, 현지금액)"
             )
         if len(candidates) > 1:
             names = ", ".join(f"{name}({row}행)" for name, row in candidates)
