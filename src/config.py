@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 APP_NAME = "Freight Charge Report Generator"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 APP_AUTHOR = "DA_GYEONG"
 SOURCE_DATA_SHEET_NAME = "Source"
 ALL_SHEET_NAME = "ALL"

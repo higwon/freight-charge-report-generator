@@ -10,7 +10,9 @@ result.xlsx
 output/
 
 build/
+build-*/
 dist/
+dist-*/
 *.spec
 !FreightChargeReportGenerator.spec
 FreightChargeReportGenerator-*.zip
